@@ -62,10 +62,9 @@ on:
         default: false
 jobs:
   get_manager:
-    uses: ./.github/workflows/get-manager.yml
-    secrets: inherit
+    uses: ./.github/workflows/build-sukisu.yml
     with:
-      kernelsu_variant: ${{ inputs.kernelsu_variant }}
+      target_version: "40167"
 
   build-kernel-a12-5-10:
     uses: ./.github/workflows/kernel-a12-5.10.yml
