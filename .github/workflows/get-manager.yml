@@ -59,16 +59,28 @@ jobs:
       - name: 安装依赖
         run: sudo apt install -y git curl jq
 
+      # 修改步骤：获取 KSU & SUSFS 版本
       - name: 获取 KSU & SUSFS 版本
         id: get_version
         run: |
-
           if [ "${{ inputs.kernelsu_variant }}" == "Next" ]; then
             echo "This is the Next variant"
             git clone https://github.com/KernelSU-Next/KernelSU-Next.git KernelSU
           elif [ "${{ inputs.kernelsu_variant }}" == "SukiSU" ]; then
             echo "This is the SukiSU variant"
             git clone https://github.com/SukiSU-Ultra/SukiSU-Ultra.git KernelSU
+            cd KernelSU
+            TARGET_GIT_COUNT=$((40167 - 40000 + 2815))
+            TARGET_COMMIT=$(git rev-list HEAD --reverse | sed -n "${TARGET_GIT_COUNT}p")
+      
+            if [ -n "$TARGET_COMMIT" ]; then
+              echo "切换到提交: $TARGET_COMMIT"
+              git checkout $TARGET_COMMIT
+            else
+              echo "警告：未找到对应40167版本的提交，使用最新版本"
+            fi
+      
+            cd ..
           elif [ "${{ inputs.kernelsu_variant }}" == "Official" ]; then
             echo "This is the Official"
             git clone https://github.com/tiann/KernelSU.git KernelSU
@@ -83,16 +95,17 @@ jobs:
 
           cd KernelSU
 
-          # 计算KSU版本号
-          KSU_GIT_VERSION=$(git rev-list --count HEAD)
-          KSU_VERSION=$((10000 + KSU_GIT_VERSION + VAR))
-          if [ "${{ inputs.kernelsu_variant }}" == "SukiSU" ]; then
-            KSU_VERSION=$((40000 + KSU_GIT_VERSION - 2815))
-          elif [ "${{ inputs.kernelsu_variant }}" == "Official" ]; then
-            KSU_VERSION=$((20000 + KSU_GIT_VERSION))
-          fi
-          echo $KSU_VERSION
-          echo "KSU_VERSION=$KSU_VERSION" >> $GITHUB_ENV
+    # 计算KSU版本号
+    KSU_GIT_VERSION=$(git rev-list --count HEAD)
+    KSU_VERSION=$((10000 + KSU_GIT_VERSION + VAR))
+    if [ "${{ inputs.kernelsu_variant }}" == "SukiSU" ]; then
+      KSU_VERSION=$((40000 + KSU_GIT_VERSION - 2815))
+    elif [ "${{ inputs.kernelsu_variant }}" == "Official" ]; then
+      KSU_VERSION=$((20000 + KSU_GIT_VERSION))
+    fi
+    
+    echo "当前版本: $KSU_VERSION"
+    echo "KSU_VERSION=$KSU_VERSION" >> $GITHUB_ENV
 
           # 计算SUSFS版本号
           INFO="https://gitlab.com/simonpunk/susfs4ksu/-/raw/gki-android14-6.1/ksu_module_susfs/module.prop\?ref_type\=heads"
