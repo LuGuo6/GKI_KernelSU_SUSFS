@@ -145,7 +145,7 @@ jobs:
             echo "--------------------------------------------------"
             echo "正在检查第 ${NUMBER} 个历史构建 (0代表最新)..."
       
-            if [ "$NUMBER" -ge 9 ]; then
+            if [ "$NUMBER" -ge 900 ]; then
               echo "查找九次仍然失败，跳出循环。"
               break
             fi
