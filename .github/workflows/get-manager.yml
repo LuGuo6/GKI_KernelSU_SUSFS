@@ -99,235 +99,69 @@ jobs:
           echo "CURRENT_COMMIT=$CURRENT_COMMIT" >> $GITHUB_ENV
           
           cd ..
-      
-      - name: 添加 KernelSU
-        id: add_KSU
-        continue-on-error: true
-        run: |
-          # 从环境变量获取之前保存的值
-          CURRENT_COMMIT="${{ env.CURRENT_COMMIT }}"
-          CURRENT_VERSION="${{ env.KSU_VERSION }}"
-          CURRENT_GIT_COUNT="${{ env.KSU_GIT_COUNT }}"
-          
-          echo "SukiSU..."
-          echo "当前commit: $CURRENT_COMMIT"
-          echo "当前提交数: $CURRENT_GIT_COUNT"
-          echo "计算版本: $CURRENT_VERSION"
-          
-          # 根据变种设置仓库
-          if [ "${{ inputs.kernelsu_variant }}" == "Next" ]; then
-            REPO="KernelSU-Next/KernelSU-Next"
-          elif [ "${{ inputs.kernelsu_variant }}" == "SukiSU" ]; then
-            REPO="SukiSU-Ultra/SukiSU-Ultra"
-          elif [ "${{ inputs.kernelsu_variant }}" == "MKSU" ]; then
-            REPO="5ec1cff/KernelSU"
-          elif [ "${{ inputs.kernelsu_variant }}" == "Official" ]; then
-            REPO="tiann/KernelSU"
-          fi
-      
-          FILENAME=$([[ "${{ inputs.kernelsu_variant }}" == "Next" ]] && echo "build-manager-ci.yml" || echo "build-manager.yml")
-          
-          # 初始化变量
-          PAGE=1
-          PER_PAGE=100  # GitHub API每页最大100条
-          MAX_PAGES=9   # 最多查9页 = 900条记录
-          FOUND_BUILD=0
-          DOWNLOAD_URL=""
-          MATCHING_BUILD_ID=""
-      
-          echo "开始查找包含 'manager' 产物的构建..."
-          echo "将搜索最多 $MAX_PAGES 页，每页 $PER_PAGE 条记录，共最多 $((MAX_PAGES * PER_PAGE)) 条记录"
-          
-          # 如果指定了force_version，优先使用版本匹配
-          FORCE_VERSION="${{ inputs.force_version }}"
-          if [ -n "$FORCE_VERSION" ] && [ "${{ inputs.kernelsu_variant }}" == "SukiSU" ]; then
-            echo "强制查找版本: $FORCE_VERSION"
-            TARGET_GIT_COUNT=$((FORCE_VERSION - 40000 + 2815))
-            echo "目标提交数: $TARGET_GIT_COUNT"
-          fi
-      
-          # 循环遍历多个API页面
-          while [ $PAGE -le $MAX_PAGES ] && [ $FOUND_BUILD -eq 0 ]; do
-            echo "=================================================="
-            START_RECORD=$(( (PAGE-1) * PER_PAGE + 1 ))
-            END_RECORD=$(( PAGE * PER_PAGE ))
-            echo "正在搜索第 $PAGE 页 (记录 $START_RECORD - $END_RECORD )..."
-            
-            # 获取当前页的成功构建
-            API_URL="https://api.github.com/repos/$REPO/actions/workflows/$FILENAME/runs?status=success&per_page=$PER_PAGE&page=$PAGE"
-            
-            RESPONSE=$(curl -s -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
-              -H "Accept: application/vnd.github.v3+json" \
-              "$API_URL")
-            
-            # 检查响应是否有效
-            if echo "$RESPONSE" | jq -e '.workflow_runs' > /dev/null 2>&1; then
-              TOTAL_BUILDS=$(echo "$RESPONSE" | jq '.workflow_runs | length')
-              echo "本页找到 $TOTAL_BUILDS 个成功构建"
-              
-              if [ $TOTAL_BUILDS -eq 0 ]; then
-                echo "第 $PAGE 页没有更多构建记录"
-                break
-              fi
-              
-              # 遍历当前页的每个构建
-              for ((i=0; i<TOTAL_BUILDS; i++)); do
-                echo "--------------------------------------------------"
-                BUILD_ID=$(echo "$RESPONSE" | jq -r ".workflow_runs[$i].id")
-                BUILD_SHA=$(echo "$RESPONSE" | jq -r ".workflow_runs[$i].head_sha")
-                BUILD_CREATED=$(echo "$RESPONSE" | jq -r ".workflow_runs[$i].created_at")
-                RUN_NUMBER=$(echo "$RESPONSE" | jq -r ".workflow_runs[$i].run_number")
-                
-                echo "构建 #${RUN_NUMBER} | ID: ${BUILD_ID} | 创建时间: ${BUILD_CREATED}"
-                echo "构建对应commit: ${BUILD_SHA:0:8}"
-                
-                # 检查commit匹配
-                if [ "${{ inputs.kernelsu_variant }}" == "SukiSU" ] && [ -n "$CURRENT_COMMIT" ]; then
-                  if [ "$BUILD_SHA" = "$CURRENT_COMMIT" ]; then
-                    echo "✓ 找到精确commit匹配的构建！"
-                    FOUND_BUILD=1
-                    MATCHING_BUILD_ID=$BUILD_ID
-                    break 2  # 跳出两层循环
-                  fi
-                  
-                  # 备选方案：检查是否为同一版本
-                  # 对于SukiSU，版本号是 40000 + git_count - 2815
-                  # 我们需要从commit中提取git_count
-                  COMMIT_INFO=$(curl -s -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
-                    "https://api.github.com/repos/$REPO/commits/$BUILD_SHA")
-                  
-                  COMMIT_MESSAGE=$(echo "$COMMIT_INFO" | jq -r '.commit.message // ""')
-                  
-                  # 尝试从commit message中提取数字
-                  BUILD_GIT_COUNT=""
-                  if [[ "$COMMIT_MESSAGE" =~ \#([0-9]+) ]]; then
-                    BUILD_GIT_COUNT=${BASH_REMATCH[1]}
-                    echo "从commit message提取到数字: $BUILD_GIT_COUNT"
-                  fi
-                  
-                  if [ -n "$BUILD_GIT_COUNT" ]; then
-                    BUILD_VERSION=$((40000 + BUILD_GIT_COUNT - 2815))
-                    echo "构建版本计算: $BUILD_VERSION (git count: $BUILD_GIT_COUNT)"
-                    
-                    if [ "$BUILD_VERSION" = "$CURRENT_VERSION" ]; then
-                      echo "✓ 找到版本匹配的构建！(版本: $BUILD_VERSION)"
-                      FOUND_BUILD=1
-                      MATCHING_BUILD_ID=$BUILD_ID
-                      break 2
-                    fi
-                    
-                    # 如果指定了force_version，检查是否匹配
-                    if [ -n "$FORCE_VERSION" ] && [ "$BUILD_VERSION" = "$FORCE_VERSION" ]; then
-                      echo "✓ 找到强制版本匹配的构建！(版本: $FORCE_VERSION)"
-                      FOUND_BUILD=1
-                      MATCHING_BUILD_ID=$BUILD_ID
-                      break 2
-                    fi
-                  fi
-                fi
-                
-                # 查找包含Manager的构建
-                ARTIFACTS_RESPONSE=$(curl -s -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
-                  "https://api.github.com/repos/$REPO/actions/runs/$BUILD_ID/artifacts")
-                
-                HAS_MANAGER=$(echo "$ARTIFACTS_RESPONSE" | jq -r '.artifacts[] | select(.name | contains("Manager")) | .name' | head -1)
-                
-                if [ -n "$HAS_MANAGER" ]; then
-                  echo "找到Manager产物: $HAS_MANAGER"
-                  
-                  # 对于非SukiSU或没有指定commit的情况，使用第一个找到的Manager构建
-                  if [ "${{ inputs.kernelsu_variant }}" != "SukiSU" ] || [ -z "$CURRENT_COMMIT" ]; then
-                    echo "使用找到的Manager构建"
-                    FOUND_BUILD=1
-                    MATCHING_BUILD_ID=$BUILD_ID
-                    break 2
-                  fi
-                else
-                  echo "没有Manager产物"
-                fi
-              done
-            else
-              echo "第 $PAGE 页API响应无效或已无数据"
-              break
-            fi
-            
-            PAGE=$((PAGE + 1))
-            # 添加延迟避免GitHub API限速
-            sleep 1
-          done
-          
-          echo "=================================================="
-          
-          # 如果找到了匹配的构建
-          if [ $FOUND_BUILD -eq 1 ] && [ -n "$MATCHING_BUILD_ID" ]; then
-            echo "找到匹配的构建ID: $MATCHING_BUILD_ID"
-            
-            # 获取构建产物
-            ARTIFACTS=$(curl -s -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
-              "https://api.github.com/repos/$REPO/actions/runs/$MATCHING_BUILD_ID/artifacts")
-            
-            # 查找Manager产物
-            MANAGER_ARTIFACT_NAME=$(echo "$ARTIFACTS" | jq -r '.artifacts[] | select(.name | contains("Manager")) | .name' | head -1)
-            DOWNLOAD_URL=$(echo "$ARTIFACTS" | jq -r '.artifacts[] | select(.name | contains("Manager")) | .archive_download_url' | head -1)
-            
-            if [ -n "$DOWNLOAD_URL" ]; then
-              echo "找到Manager产物下载链接"
-              echo "产物名称: $MANAGER_ARTIFACT_NAME"
-            else
-              echo "构建存在但没有找到Manager下载链接"
-            fi
-          else
-            echo "在 $((MAX_PAGES * PER_PAGE)) 条记录中未找到匹配的构建"
-            echo "将尝试下载最新构建作为备选"
-            
-            # 备选方案：下载最新构建
-            LATEST_RESPONSE=$(curl -s -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
-              "https://api.github.com/repos/$REPO/actions/workflows/$FILENAME/runs?status=success&per_page=1")
-            
-            LATEST_BUILD=$(echo "$LATEST_RESPONSE" | jq -r '.workflow_runs[0].id // empty')
-            
-            if [ -n "$LATEST_BUILD" ] && [ "$LATEST_BUILD" != "null" ]; then
-              echo "使用最新构建ID: $LATEST_BUILD"
-              MATCHING_BUILD_ID=$LATEST_BUILD
-              
-              ARTIFACTS=$(curl -s -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
-                "https://api.github.com/repos/$REPO/actions/runs/$LATEST_BUILD/artifacts")
-              
-              DOWNLOAD_URL=$(echo "$ARTIFACTS" | jq -r '.artifacts[] | select(.name | contains("Manager")) | .archive_download_url' | head -1)
-            fi
-          fi
-          
-          # 下载 Manager 文件
-          if [ -n "$DOWNLOAD_URL" ]; then
-            FILENAME="${{ inputs.kernelsu_variant }}-管理器(${{ env.KSU_VERSION }}).zip"
-            curl -L -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" -o "$FILENAME" "$DOWNLOAD_URL"
-            echo "Manager 文件已下载为：$FILENAME"
-            
-            # 验证文件大小
-            if [ -f "$FILENAME" ]; then
-              FILE_SIZE=$(stat -c%s "$FILENAME" 2>/dev/null || stat -f%z "$FILENAME" 2>/dev/null || echo "0")
-              if [ "$FILE_SIZE" -gt 1000 ]; then
-                echo "文件大小: $((FILE_SIZE/1024)) KB，解压..."
-                unzip -q "$FILENAME" || echo "解压失败，但继续执行"
-                rm -f "$FILENAME"
-              else
-                echo "警告：下载的文件可能无效（大小: $FILE_SIZE 字节）"
-              fi
-            else
-              echo "错误：文件下载失败"
-              exit 1
-            fi
-          else
-            echo "错误：无法下载Manager文件"
-            echo "可能的原因："
-            echo "1. 没有成功的构建"
-            echo "2. 构建产物已过期（GitHub只保留90天）"
-            echo "3. API限流或权限问题"
-            echo "4. 指定的版本可能没有对应的构建"
-            echo "5. 构建产物名称不包含'Manager'关键字"
-            exit 1
-          fi
 
+
+
+
+
+
+
+
+
+
+          - name: 构建指定版本的SukiSU
+            if: inputs.kernelsu_variant == 'SukiSU'
+            run: |
+              # 克隆仓库
+              git clone https://github.com/SukiSU-Ultra/SukiSU-Ultra.git
+              
+              # 进入目录
+              cd SukiSU-Ultra
+              
+              # 目标版本40167对应的git count
+              TARGET_GIT_COUNT=$((40167 - 40000 + 2815))
+              echo "目标git count: $TARGET_GIT_COUNT"
+              
+              # 获取所有提交
+              ALL_COMMITS=$(git rev-list --reverse HEAD)
+              
+              # 获取第TARGET_GIT_COUNT个提交
+              TARGET_COMMIT=$(echo "$ALL_COMMITS" | sed -n "${TARGET_GIT_COUNT}p")
+              
+              if [ -n "$TARGET_COMMIT" ]; then
+                echo "切换到目标提交: $TARGET_COMMIT"
+                git checkout $TARGET_COMMIT
+                
+                # 验证版本
+                CURRENT_GIT_COUNT=$(git rev-list --count HEAD)
+                CALCULATED_VERSION=$((40000 + CURRENT_GIT_COUNT - 2815))
+                echo "当前版本: $CALCULATED_VERSION"
+                
+                if [ "$CALCULATED_VERSION" = "40167" ]; then
+                  echo "版本验证通过，开始构建..."
+                  # 这里添加构建命令
+                  # 通常需要安装Android SDK、gradle等
+                  # ./gradlew assembleRelease
+                else
+                  echo "版本不匹配"
+                fi
+              else
+                echo "未找到对应的提交"
+              fi
+
+
+
+
+
+
+
+
+
+
+
+
+
+      
       - name: 添加 SUSFS 模块
         id: add_SUSFS
         continue-on-error: true
