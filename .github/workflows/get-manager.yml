@@ -1,218 +1,187 @@
-name: GetManager
-permissions:
-  contents: write  # Allow writing to repository contents (for pushing tags)
-  actions: read   # Allows triggering actions
+name: Build Specific SukiSU Version
 
 on:
-  workflow_call: # This allows this workflow to be called from another workflow
+  workflow_call:
     inputs:
-      kernelsu_variant:
+      target_version:
         required: true
         type: string
-    outputs:
-      susVer:
-        description: "The fetched SUSFS version number"
-        value: ${{ jobs.get_ksu_manager.outputs.susVer }}
-
-      ksuVer:
-        description: "The calculated KSU version number"
-        value: ${{ jobs.get_ksu_manager.outputs.ksuVer }}
+        description: "The target SukiSU version to build (e.g., 40167)"
 
 jobs:
-  get_ksu_manager:
+  build-sukisu:
     runs-on: ubuntu-latest
-    outputs:
-      # 输出1: KSU版本号
-      ksuVer: ${{ steps.get_version.outputs.kversion }}
-      # 输出2: SUSFS版本号
-      susVer: ${{ steps.get_version.outputs.sversion }}
-    env:
-      CCACHE_COMPILERCHECK: "%compiler% -dumpmachine; %compiler% -dumpversion"
-      CCACHE_NOHASHDIR: "true"
-      CCACHE_HARDLINK: "true"
-      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
     steps:
-      - name: 🧐 Debug Workflow Caller Context
+      - name: 🚀 准备构建环境
         run: |
-          echo "==================== DEBUG CONTEXT ===================="
-          echo " "
-          echo "EVENT NAME: ${{ github.event_name }}"
-          echo " "
-          echo "--- CALLER INFORMATION ---"
-          echo "  - Caller Repository: ${{ github.caller_repository }}"
-          echo "  - Caller Workflow:   ${{ github.caller_workflow }}"
-          echo "  - Caller User:       ${{ github.triggering_actor }}"
-          echo " "
-          echo "--- WORKFLOW & JOB INFORMATION ---"
-          echo "  - Current Workflow:  ${{ github.workflow }}"
-          echo "  - Current Job ID:    ${{ github.job }}"
-          echo "  - Current Run ID:    ${{ github.run_id }}"
-          echo "  - Current Run Number:${{ github.run_number }}"
-          echo " "
-          echo "--- GIT REFERENCE INFORMATION ---"
-          echo "  - Git Ref:           ${{ github.ref }}"
-          echo "  - Ref Type:          ${{ github.ref_type }}"
-          echo " "
-          echo "======================================================="
+          echo "目标版本: ${{ inputs.target_version }}"
           
-      - name: 安装依赖
-        run: sudo apt install -y git curl jq
-      - name: 获取 KSU & SUSFS 版本
-        id: get_version
+      - name: 📦 安装构建依赖
         run: |
-          if [ "${{ inputs.kernelsu_variant }}" == "Next" ]; then
-            echo "This is the Next variant"
-            git clone https://github.com/KernelSU-Next/KernelSU-Next.git KernelSU
-          elif [ "${{ inputs.kernelsu_variant }}" == "SukiSU" ]; then
-            echo "This is the SukiSU variant"
-            git clone https://github.com/SukiSU-Ultra/SukiSU-Ultra.git KernelSU
-          elif [ "${{ inputs.kernelsu_variant }}" == "Official" ]; then
-            echo "This is the Official"
-            git clone https://github.com/tiann/KernelSU.git KernelSU
-          elif [ "${{ inputs.kernelsu_variant }}" == "MKSU" ]; then
-            echo "This is the Official"
-            git clone https://github.com/5ec1cff/KernelSU.git KernelSU    
-          else
-            echo "Unknown variant"
-          fi
-      
-          VAR=$([[ "${{ inputs.kernelsu_variant }}" == "SukiSU" ]] && echo 700 || echo 200)
-      
-          cd KernelSU
-      
-          # 计算KSU版本号
-          KSU_GIT_VERSION=$(git rev-list --count HEAD)
-          KSU_VERSION=$((10000 + KSU_GIT_VERSION + VAR))
-          if [ "${{ inputs.kernelsu_variant }}" == "SukiSU" ]; then
-            KSU_VERSION=$((40000 + KSU_GIT_VERSION - 2815))
-          elif [ "${{ inputs.kernelsu_variant }}" == "Official" ]; then
-            KSU_VERSION=$((20000 + KSU_GIT_VERSION))
-          fi
-          
-          echo "当前版本: $KSU_VERSION"
-          echo "KSU_VERSION=$KSU_VERSION" >> $GITHUB_ENV
-          echo "KSU_GIT_COUNT=$KSU_GIT_VERSION" >> $GITHUB_ENV
-          
-          # 获取当前commit哈希并保存到环境变量
-          CURRENT_COMMIT=$(git rev-parse HEAD)
-          echo "CURRENT_COMMIT=$CURRENT_COMMIT" >> $GITHUB_ENV
-          
-          cd ..
-
-
-
-
-
-
-
-
-
-
-      - name: 构建指定版本的SukiSU
-        if: inputs.kernelsu_variant == 'SukiSU'
+          sudo apt-get update
+          sudo apt-get install -y \
+            openjdk-17-jdk \
+            git \
+            curl \
+            unzip \
+            wget \
+            zip
+        
+      - name: 🔧 设置Java环境
         run: |
-          # 克隆仓库
-          git clone https://github.com/SukiSU-Ultra/SukiSU-Ultra.git
-          
-          # 进入目录
-          cd SukiSU-Ultra
+          echo "JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64" >> $GITHUB_ENV
+          echo "PATH=$JAVA_HOME/bin:$PATH" >> $GITHUB_ENV
+      
+      - name: 📥 克隆SukiSU仓库
+        run: |
+          git clone https://github.com/SukiSU-Ultra/SukiSU-Ultra.git suksiu-repo
+          cd suksiu-repo
           
           # 目标版本40167对应的git count
-          TARGET_GIT_COUNT=$((40167 - 40000 + 2815))
+          TARGET_VERSION="${{ inputs.target_version }}"
+          TARGET_GIT_COUNT=$((TARGET_VERSION - 40000 + 2815))
+          echo "目标版本: $TARGET_VERSION"
           echo "目标git count: $TARGET_GIT_COUNT"
           
           # 获取所有提交
           ALL_COMMITS=$(git rev-list --reverse HEAD)
+          TOTAL_COMMITS=$(git rev-list --count HEAD)
+          echo "总提交数: $TOTAL_COMMITS"
           
           # 获取第TARGET_GIT_COUNT个提交
-          TARGET_COMMIT=$(echo "$ALL_COMMITS" | sed -n "${TARGET_GIT_COUNT}p")
-          
-          if [ -n "$TARGET_COMMIT" ]; then
-            echo "切换到目标提交: $TARGET_COMMIT"
+          if [ $TARGET_GIT_COUNT -le $TOTAL_COMMITS ] && [ $TARGET_GIT_COUNT -gt 0 ]; then
+            TARGET_COMMIT=$(echo "$ALL_COMMITS" | sed -n "${TARGET_GIT_COUNT}p")
+            echo "切换到目标提交: ${TARGET_COMMIT:0:8}"
             git checkout $TARGET_COMMIT
             
             # 验证版本
             CURRENT_GIT_COUNT=$(git rev-list --count HEAD)
             CALCULATED_VERSION=$((40000 + CURRENT_GIT_COUNT - 2815))
-            echo "当前版本: $CALCULATED_VERSION"
+            echo "当前提交数: $CURRENT_GIT_COUNT"
+            echo "计算版本: $CALCULATED_VERSION"
             
-            if [ "$CALCULATED_VERSION" = "40167" ]; then
-              echo "版本验证通过，开始构建..."
-              # 这里添加构建命令
-              # 通常需要安装Android SDK、gradle等
-              # ./gradlew assembleRelease
+            if [ "$CALCULATED_VERSION" = "$TARGET_VERSION" ]; then
+              echo "✅ 版本验证通过: $TARGET_VERSION"
+              echo "VERSION_MATCH=true" >> $GITHUB_ENV
             else
-              echo "版本不匹配"
+              echo "❌ 版本不匹配: 期望 $TARGET_VERSION, 实际 $CALCULATED_VERSION"
+              echo "VERSION_MATCH=false" >> $GITHUB_ENV
             fi
           else
-            echo "未找到对应的提交"
+            echo "❌ 目标git count无效: $TARGET_GIT_COUNT"
+            echo "最大有效git count: $TOTAL_COMMITS"
+            echo "VERSION_MATCH=false" >> $GITHUB_ENV
           fi
-
-
-
-
-
-
-
-
-
-
-
-
-
+          
+          cd ..
       
-      - name: 添加 SUSFS 模块
-        id: add_SUSFS
-        continue-on-error: true
+      - name: 🏗️ 构建管理器APK
+        if: env.VERSION_MATCH == 'true'
         run: |
-          BUILD_ID=$(curl -s -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
-          "https://api.github.com/repos/sidex15/susfs4ksu-module/actions/workflows/build.yml/runs?status=success" |
-          jq -r '.workflow_runs[0].id')
-
-          ARTIFACTS=$(curl -s -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
-          "https://api.github.com/repos/sidex15/susfs4ksu-module/actions/runs/$BUILD_ID/artifacts")
-
-          DOWNLOAD_URL=$(echo "$ARTIFACTS" | jq -r '.artifacts[0].archive_download_url') 
-
-          NAME=$(echo "$ARTIFACTS" | jq -r '.artifacts[0].name')
-          echo "SUSFS_NAME=$NAME" >> $GITHUB_ENV
-          NAME="susfs-$NAME.zip"
+          cd suksiu-repo
           
-          echo $DOWNLOAD_URL
-          echo $NAME
-          # 下载 Manager 文件
-          curl -L -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" -o "$NAME" "$DOWNLOAD_URL"
-          echo "$NAME 文件已下载.zip"
+          # 检查项目结构
+          echo "项目结构:"
+          ls -la
           
-          
-          echo "正在检查调用者: ${{ github.caller_workflow }}"
-
-          # 由用户调用或是由作者上传到release?
-
-          if [ "${{ github.workflow }}" == "测试发布" ]; then
-            echo "这是测试发布工作流"
-            mkdir -p susfs-module && mv $NAME susfs-module
+          # 检查是否有gradle文件
+          if [ -f "gradlew" ]; then
+            echo "找到gradlew，准备构建..."
+            
+            # 给gradlew执行权限
+            chmod +x gradlew
+            
+            # 检查可用任务
+            echo "可用Gradle任务:"
+            ./gradlew tasks --all || true
+            
+            # 尝试构建
+            echo "开始构建..."
+            
+            # 方法1: 尝试构建manager模块
+            if [ -d "manager" ]; then
+              echo "构建manager模块..."
+              ./gradlew :manager:assembleRelease || ./gradlew :app:assembleRelease || ./gradlew assembleRelease
+            else
+              # 方法2: 尝试构建整个项目
+              echo "构建整个项目..."
+              ./gradlew assembleRelease
+            fi
+            
+            # 查找生成的APK文件
+            echo "查找生成的APK文件..."
+            find . -name "*.apk" -type f | while read apk; do
+              echo "找到APK: $apk"
+              APK_NAME=$(basename "$apk")
+              
+              # 检查是否是release版本
+              if [[ "$APK_NAME" =~ release|Release ]]; then
+                echo "✅ 找到Release APK: $apk"
+                # 复制到工作目录
+                cp "$apk" "../SukiSU-管理器-${{ inputs.target_version }}.apk"
+                echo "APK_COPIED=true" >> $GITHUB_ENV
+              fi
+            done
           else
-            echo "这是其他工作流"
-            mkdir -p susfs-module && unzip *.zip -d susfs-module
+            echo "❌ 未找到gradlew，可能是非标准项目结构"
+            echo "项目内容:"
+            find . -type f -name "*.gradle" -o -name "*.kts" | head -20
           fi
-
-      - name: Notify on failure
-        if: steps.add_KSU.outcome == 'failure'
-        run: echo "下载CI构建的KSU失败!"
-
-      - name: 上传APK
-        if: steps.add_KSU.outcome == 'success'
+          
+          cd ..
+      
+      - name: 📱 备选方案：直接使用预编译版本
+        if: env.VERSION_MATCH != 'true' || env.APK_COPIED != 'true'
+        run: |
+          echo "⚠ 无法构建指定版本，尝试其他方法..."
+          
+          # 方法1: 查看是否有可用的release
+          echo "检查GitHub Releases..."
+          RELEASES=$(curl -s "https://api.github.com/repos/SukiSU-Ultra/SukiSU-Ultra/releases")
+          
+          # 查找包含版本号的release
+          RELEASE_TAG=$(echo "$RELEASES" | jq -r '.[].tag_name' | grep -i "${{ inputs.target_version }}" | head -1)
+          
+          if [ -n "$RELEASE_TAG" ]; then
+            echo "找到Release标签: $RELEASE_TAG"
+            RELEASE_URL="https://github.com/SukiSU-Ultra/SukiSU-Ultra/releases/download/$RELEASE_TAG"
+            
+            # 尝试下载常见的APK文件名
+            for apk_name in "manager.apk" "app-release.apk" "KernelSU.apk" "SukiSU.apk"; do
+              if curl -I -f "${RELEASE_URL}/${apk_name}" 2>/dev/null | head -1 | grep -q "200"; then
+                echo "下载APK: ${RELEASE_URL}/${apk_name}"
+                curl -L -o "SukiSU-管理器-${{ inputs.target_version }}.apk" "${RELEASE_URL}/${apk_name}"
+                echo "DOWNLOADED=true" >> $GITHUB_ENV
+                break
+              fi
+            done
+          fi
+          
+          if [ "$DOWNLOADED" != "true" ]; then
+            echo "❌ 无法获取指定版本的APK"
+            echo "TARGET_VERSION=${{ inputs.target_version }}" >> $GITHUB_ENV
+          fi
+      
+      - name: 📤 上传构建产物
+        if: env.APK_COPIED == 'true' || env.DOWNLOADED == 'true'
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ inputs.kernelsu_variant }}-Manager(${{ env.KSU_VERSION }})
+          name: SukiSU-Manager-${{ inputs.target_version }}
           path: |
             *.apk
-
-      - name: 上传SUSFS模块
-        if: steps.add_SUSFS.outcome == 'success'
-        uses: actions/upload-artifact@v4
-        with:
-          name: susfs-${{ env.SUSFS_NAME }}
-          path: ./susfs-module/*
+      
+      - name: ⚠️ 构建失败通知
+        if: failure()
+        run: |
+          echo "❌ 构建指定版本 ${{ inputs.target_version }} 失败"
+          echo "可能原因:"
+          echo "1. 版本号无效"
+          echo "2. 项目结构变化"
+          echo "3. 构建依赖缺失"
+          echo "4. 该版本可能从未发布"
+          
+          # 显示当前最新的版本信息
+          cd suksiu-repo 2>/dev/null && git checkout main 2>/dev/null || git checkout master 2>/dev/null
+          LATEST_GIT_COUNT=$(git rev-list --count HEAD 2>/dev/null || echo "unknown")
+          LATEST_VERSION=$((40000 + LATEST_GIT_COUNT - 2815)) 2>/dev/null || LATEST_VERSION="unknown"
+          echo "当前最新版本: $LATEST_VERSION (git count: $LATEST_GIT_COUNT)"
