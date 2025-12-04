@@ -109,45 +109,45 @@ jobs:
 
 
 
-          - name: 构建指定版本的SukiSU
-            if: inputs.kernelsu_variant == 'SukiSU'
-            run: |
-              # 克隆仓库
-              git clone https://github.com/SukiSU-Ultra/SukiSU-Ultra.git
-              
-              # 进入目录
-              cd SukiSU-Ultra
-              
-              # 目标版本40167对应的git count
-              TARGET_GIT_COUNT=$((40167 - 40000 + 2815))
-              echo "目标git count: $TARGET_GIT_COUNT"
-              
-              # 获取所有提交
-              ALL_COMMITS=$(git rev-list --reverse HEAD)
-              
-              # 获取第TARGET_GIT_COUNT个提交
-              TARGET_COMMIT=$(echo "$ALL_COMMITS" | sed -n "${TARGET_GIT_COUNT}p")
-              
-              if [ -n "$TARGET_COMMIT" ]; then
-                echo "切换到目标提交: $TARGET_COMMIT"
-                git checkout $TARGET_COMMIT
-                
-                # 验证版本
-                CURRENT_GIT_COUNT=$(git rev-list --count HEAD)
-                CALCULATED_VERSION=$((40000 + CURRENT_GIT_COUNT - 2815))
-                echo "当前版本: $CALCULATED_VERSION"
-                
-                if [ "$CALCULATED_VERSION" = "40167" ]; then
-                  echo "版本验证通过，开始构建..."
-                  # 这里添加构建命令
-                  # 通常需要安装Android SDK、gradle等
-                  # ./gradlew assembleRelease
-                else
-                  echo "版本不匹配"
-                fi
-              else
-                echo "未找到对应的提交"
-              fi
+      - name: 构建指定版本的SukiSU
+        if: inputs.kernelsu_variant == 'SukiSU'
+        run: |
+          # 克隆仓库
+          git clone https://github.com/SukiSU-Ultra/SukiSU-Ultra.git
+          
+          # 进入目录
+          cd SukiSU-Ultra
+          
+          # 目标版本40167对应的git count
+          TARGET_GIT_COUNT=$((40167 - 40000 + 2815))
+          echo "目标git count: $TARGET_GIT_COUNT"
+          
+          # 获取所有提交
+          ALL_COMMITS=$(git rev-list --reverse HEAD)
+          
+          # 获取第TARGET_GIT_COUNT个提交
+          TARGET_COMMIT=$(echo "$ALL_COMMITS" | sed -n "${TARGET_GIT_COUNT}p")
+          
+          if [ -n "$TARGET_COMMIT" ]; then
+            echo "切换到目标提交: $TARGET_COMMIT"
+            git checkout $TARGET_COMMIT
+            
+            # 验证版本
+            CURRENT_GIT_COUNT=$(git rev-list --count HEAD)
+            CALCULATED_VERSION=$((40000 + CURRENT_GIT_COUNT - 2815))
+            echo "当前版本: $CALCULATED_VERSION"
+            
+            if [ "$CALCULATED_VERSION" = "40167" ]; then
+              echo "版本验证通过，开始构建..."
+              # 这里添加构建命令
+              # 通常需要安装Android SDK、gradle等
+              # ./gradlew assembleRelease
+            else
+              echo "版本不匹配"
+            fi
+          else
+            echo "未找到对应的提交"
+          fi
 
 
 
