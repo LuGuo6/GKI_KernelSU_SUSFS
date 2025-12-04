@@ -58,37 +58,74 @@ jobs:
           
       - name: 安装依赖
         run: sudo apt install -y git curl jq
-
+      - name: 获取 KSU & SUSFS 版本
+        id: get_version
+        run: |
+          if [ "${{ inputs.kernelsu_variant }}" == "Next" ]; then
+            echo "This is the Next variant"
+            git clone https://github.com/KernelSU-Next/KernelSU-Next.git KernelSU
+          elif [ "${{ inputs.kernelsu_variant }}" == "SukiSU" ]; then
+            echo "This is the SukiSU variant"
+            git clone https://github.com/SukiSU-Ultra/SukiSU-Ultra.git KernelSU
+          elif [ "${{ inputs.kernelsu_variant }}" == "Official" ]; then
+            echo "This is the Official"
+            git clone https://github.com/tiann/KernelSU.git KernelSU
+          elif [ "${{ inputs.kernelsu_variant }}" == "MKSU" ]; then
+            echo "This is the Official"
+            git clone https://github.com/5ec1cff/KernelSU.git KernelSU    
+          else
+            echo "Unknown variant"
+          fi
+      
+          VAR=$([[ "${{ inputs.kernelsu_variant }}" == "SukiSU" ]] && echo 700 || echo 200)
+      
+          cd KernelSU
+      
+          # 计算KSU版本号
+          KSU_GIT_VERSION=$(git rev-list --count HEAD)
+          KSU_VERSION=$((10000 + KSU_GIT_VERSION + VAR))
+          if [ "${{ inputs.kernelsu_variant }}" == "SukiSU" ]; then
+            KSU_VERSION=$((40000 + KSU_GIT_VERSION - 2815))
+          elif [ "${{ inputs.kernelsu_variant }}" == "Official" ]; then
+            KSU_VERSION=$((20000 + KSU_GIT_VERSION))
+          fi
+          
+          echo "当前版本: $KSU_VERSION"
+          echo "KSU_VERSION=$KSU_VERSION" >> $GITHUB_ENV
+          echo "KSU_GIT_COUNT=$KSU_GIT_VERSION" >> $GITHUB_ENV
+          
+          # 获取当前commit哈希并保存到环境变量
+          CURRENT_COMMIT=$(git rev-parse HEAD)
+          echo "CURRENT_COMMIT=$CURRENT_COMMIT" >> $GITHUB_ENV
+          
+          cd ..
+      
       - name: 添加 KernelSU
         id: add_KSU
         continue-on-error: true
         run: |
+          # 从环境变量获取之前保存的值
+          CURRENT_COMMIT="${{ env.CURRENT_COMMIT }}"
+          CURRENT_VERSION="${{ env.KSU_VERSION }}"
+          CURRENT_GIT_COUNT="${{ env.KSU_GIT_COUNT }}"
+          
+          echo "SukiSU..."
+          echo "当前commit: $CURRENT_COMMIT"
+          echo "当前提交数: $CURRENT_GIT_COUNT"
+          echo "计算版本: $CURRENT_VERSION"
+          
+          # 根据变种设置仓库
           if [ "${{ inputs.kernelsu_variant }}" == "Next" ]; then
-            echo "KernelSU Next..."
             REPO="KernelSU-Next/KernelSU-Next"
           elif [ "${{ inputs.kernelsu_variant }}" == "SukiSU" ]; then
-            echo "SukiSU..."
             REPO="SukiSU-Ultra/SukiSU-Ultra"
-            
-            # 获取当前checkout的commit哈希
-            cd KernelSU
-            CURRENT_COMMIT=$(git rev-parse HEAD)
-            CURRENT_GIT_COUNT=$(git rev-list --count HEAD)
-            CURRENT_VERSION=$((40000 + CURRENT_GIT_COUNT - 2815))
-            echo "当前commit: $CURRENT_COMMIT"
-            echo "当前提交数: $CURRENT_GIT_COUNT"
-            echo "计算版本: $CURRENT_VERSION"
-            cd ..
           elif [ "${{ inputs.kernelsu_variant }}" == "MKSU" ]; then
-            echo "MKSU..."
             REPO="5ec1cff/KernelSU"
           elif [ "${{ inputs.kernelsu_variant }}" == "Official" ]; then
-            echo "KSU..."
             REPO="tiann/KernelSU"
           fi
       
           FILENAME=$([[ "${{ inputs.kernelsu_variant }}" == "Next" ]] && echo "build-manager-ci.yml" || echo "build-manager.yml")
-          KSUM="Manager"
           
           # 初始化变量
           PAGE=1
@@ -118,7 +155,6 @@ jobs:
             
             # 获取当前页的成功构建
             API_URL="https://api.github.com/repos/$REPO/actions/workflows/$FILENAME/runs?status=success&per_page=$PER_PAGE&page=$PAGE"
-            echo "API URL: $API_URL"
             
             RESPONSE=$(curl -s -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
               -H "Accept: application/vnd.github.v3+json" \
@@ -154,19 +190,19 @@ jobs:
                     break 2  # 跳出两层循环
                   fi
                   
-                  # 备选方案：如果commit不完全匹配，检查是否为同一版本
-                  # 尝试从commit message中提取git count
+                  # 备选方案：检查是否为同一版本
+                  # 对于SukiSU，版本号是 40000 + git_count - 2815
+                  # 我们需要从commit中提取git_count
                   COMMIT_INFO=$(curl -s -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
                     "https://api.github.com/repos/$REPO/commits/$BUILD_SHA")
                   
                   COMMIT_MESSAGE=$(echo "$COMMIT_INFO" | jq -r '.commit.message // ""')
                   
-                  # 尝试提取git count
+                  # 尝试从commit message中提取数字
                   BUILD_GIT_COUNT=""
-                  if [[ "$COMMIT_MESSAGE" =~ \[KernelSU.*Manager.*CI\]\ *#([0-9]+) ]]; then
+                  if [[ "$COMMIT_MESSAGE" =~ \#([0-9]+) ]]; then
                     BUILD_GIT_COUNT=${BASH_REMATCH[1]}
-                  elif [[ "$COMMIT_MESSAGE" =~ #[0-9]+\ from\ ([0-9]+) ]]; then
-                    BUILD_GIT_COUNT=${BASH_REMATCH[1]}
+                    echo "从commit message提取到数字: $BUILD_GIT_COUNT"
                   fi
                   
                   if [ -n "$BUILD_GIT_COUNT" ]; then
@@ -187,13 +223,10 @@ jobs:
                       MATCHING_BUILD_ID=$BUILD_ID
                       break 2
                     fi
-                  else
-                    # 如果没有提取到git count，尝试使用run number
-                    echo "无法从commit message提取git count，跳过版本检查"
                   fi
                 fi
                 
-                # 对于非SukiSU变种或其他情况，查找包含Manager的构建
+                # 查找包含Manager的构建
                 ARTIFACTS_RESPONSE=$(curl -s -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
                   "https://api.github.com/repos/$REPO/actions/runs/$BUILD_ID/artifacts")
                 
