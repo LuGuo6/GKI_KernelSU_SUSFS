@@ -59,62 +59,6 @@ jobs:
       - name: 安装依赖
         run: sudo apt install -y git curl jq
 
-      # 修改步骤：获取 KSU & SUSFS 版本
-      - name: 获取 KSU & SUSFS 版本
-        id: get_version
-        run: |
-          if [ "${{ inputs.kernelsu_variant }}" == "Next" ]; then
-            echo "This is the Next variant"
-            git clone https://github.com/KernelSU-Next/KernelSU-Next.git KernelSU
-          elif [ "${{ inputs.kernelsu_variant }}" == "SukiSU" ]; then
-            echo "This is the SukiSU variant"
-            git clone https://github.com/SukiSU-Ultra/SukiSU-Ultra.git KernelSU
-            cd KernelSU
-            TARGET_GIT_COUNT=$((40167 - 40000 + 2815))
-            TARGET_COMMIT=$(git rev-list HEAD --reverse | sed -n "${TARGET_GIT_COUNT}p")
-      
-            if [ -n "$TARGET_COMMIT" ]; then
-              echo "切换到提交: $TARGET_COMMIT"
-              git checkout $TARGET_COMMIT
-            else
-              echo "警告：未找到对应40167版本的提交，使用最新版本"
-            fi
-      
-            cd ..
-          elif [ "${{ inputs.kernelsu_variant }}" == "Official" ]; then
-            echo "This is the Official"
-            git clone https://github.com/tiann/KernelSU.git KernelSU
-          elif [ "${{ inputs.kernelsu_variant }}" == "MKSU" ]; then
-            echo "This is the Official"
-            git clone https://github.com/5ec1cff/KernelSU.git KernelSU    
-          else
-            echo "Unknown variant"
-          fi
-
-          VAR=$([[ "${{ inputs.kernelsu_variant }}" == "SukiSU" ]] && echo 700 || echo 200)
-
-          cd KernelSU
-
-          # 计算KSU版本号
-          KSU_GIT_VERSION=$(git rev-list --count HEAD)
-          KSU_VERSION=$((10000 + KSU_GIT_VERSION + VAR))
-          if [ "${{ inputs.kernelsu_variant }}" == "SukiSU" ]; then
-            KSU_VERSION=$((40000 + KSU_GIT_VERSION - 2815))
-          elif [ "${{ inputs.kernelsu_variant }}" == "Official" ]; then
-            KSU_VERSION=$((20000 + KSU_GIT_VERSION))
-          fi
-    
-          echo "当前版本: $KSU_VERSION"
-          echo "KSU_VERSION=$KSU_VERSION" >> $GITHUB_ENV
-
-          # 计算SUSFS版本号
-          INFO="https://gitlab.com/simonpunk/susfs4ksu/-/raw/gki-android14-6.1/ksu_module_susfs/module.prop\?ref_type\=heads"
-          SUS_VERSION=$(curl -s $INFO | awk -F '=' '$1 == "version" { print $2 }')
-          echo $SUS_VERSION
-
-          # 导出这两个值给release
-          echo "kversion=$KSU_VERSION" >> $GITHUB_OUTPUT
-          echo "sversion=$SUS_VERSION" >> $GITHUB_OUTPUT
       - name: 添加 KernelSU
         id: add_KSU
         continue-on-error: true
@@ -129,8 +73,10 @@ jobs:
             # 获取当前checkout的commit哈希
             cd KernelSU
             CURRENT_COMMIT=$(git rev-parse HEAD)
-            CURRENT_VERSION=$((40000 + $(git rev-list --count HEAD) - 2815))
+            CURRENT_GIT_COUNT=$(git rev-list --count HEAD)
+            CURRENT_VERSION=$((40000 + CURRENT_GIT_COUNT - 2815))
             echo "当前commit: $CURRENT_COMMIT"
+            echo "当前提交数: $CURRENT_GIT_COUNT"
             echo "计算版本: $CURRENT_VERSION"
             cd ..
           elif [ "${{ inputs.kernelsu_variant }}" == "MKSU" ]; then
@@ -150,11 +96,10 @@ jobs:
           MAX_PAGES=9   # 最多查9页 = 900条记录
           FOUND_BUILD=0
           DOWNLOAD_URL=""
-          TARGET_SHA=""
           MATCHING_BUILD_ID=""
       
           echo "开始查找包含 'manager' 产物的构建..."
-          echo "将搜索最多 ${MAX_PAGES} 页，每页 ${PER_PAGE} 条记录，共最多 ${MAX_PAGES}00 条记录"
+          echo "将搜索最多 $MAX_PAGES 页，每页 $PER_PAGE 条记录，共最多 $((MAX_PAGES * PER_PAGE)) 条记录"
           
           # 如果指定了force_version，优先使用版本匹配
           FORCE_VERSION="${{ inputs.force_version }}"
@@ -167,7 +112,9 @@ jobs:
           # 循环遍历多个API页面
           while [ $PAGE -le $MAX_PAGES ] && [ $FOUND_BUILD -eq 0 ]; do
             echo "=================================================="
-            echo "正在搜索第 ${PAGE} 页 (记录 ${(( (PAGE-1)*PER_PAGE+1 ))} - $(( PAGE*PER_PAGE )) )..."
+            START_RECORD=$(( (PAGE-1) * PER_PAGE + 1 ))
+            END_RECORD=$(( PAGE * PER_PAGE ))
+            echo "正在搜索第 $PAGE 页 (记录 $START_RECORD - $END_RECORD )..."
             
             # 获取当前页的成功构建
             API_URL="https://api.github.com/repos/$REPO/actions/workflows/$FILENAME/runs?status=success&per_page=$PER_PAGE&page=$PAGE"
@@ -188,7 +135,7 @@ jobs:
               fi
               
               # 遍历当前页的每个构建
-              for i in $(seq 0 $((TOTAL_BUILDS-1))); do
+              for ((i=0; i<TOTAL_BUILDS; i++)); do
                 echo "--------------------------------------------------"
                 BUILD_ID=$(echo "$RESPONSE" | jq -r ".workflow_runs[$i].id")
                 BUILD_SHA=$(echo "$RESPONSE" | jq -r ".workflow_runs[$i].head_sha")
@@ -208,10 +155,19 @@ jobs:
                   fi
                   
                   # 备选方案：如果commit不完全匹配，检查是否为同一版本
-                  # 获取构建对应的git count
-                  BUILD_GIT_COUNT=$(curl -s -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
-                    "https://api.github.com/repos/$REPO/commits/$BUILD_SHA" | \
-                    jq -r '.commit.message' | grep -o "\[KernelSU Manager CI\] #[0-9]*" | grep -o "[0-9]*" || echo "")
+                  # 尝试从commit message中提取git count
+                  COMMIT_INFO=$(curl -s -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+                    "https://api.github.com/repos/$REPO/commits/$BUILD_SHA")
+                  
+                  COMMIT_MESSAGE=$(echo "$COMMIT_INFO" | jq -r '.commit.message // ""')
+                  
+                  # 尝试提取git count
+                  BUILD_GIT_COUNT=""
+                  if [[ "$COMMIT_MESSAGE" =~ \[KernelSU.*Manager.*CI\]\ *#([0-9]+) ]]; then
+                    BUILD_GIT_COUNT=${BASH_REMATCH[1]}
+                  elif [[ "$COMMIT_MESSAGE" =~ #[0-9]+\ from\ ([0-9]+) ]]; then
+                    BUILD_GIT_COUNT=${BASH_REMATCH[1]}
+                  fi
                   
                   if [ -n "$BUILD_GIT_COUNT" ]; then
                     BUILD_VERSION=$((40000 + BUILD_GIT_COUNT - 2815))
@@ -231,6 +187,9 @@ jobs:
                       MATCHING_BUILD_ID=$BUILD_ID
                       break 2
                     fi
+                  else
+                    # 如果没有提取到git count，尝试使用run number
+                    echo "无法从commit message提取git count，跳过版本检查"
                   fi
                 fi
                 
@@ -285,13 +244,14 @@ jobs:
               echo "构建存在但没有找到Manager下载链接"
             fi
           else
-            echo "在 ${MAX_PAGES}00 条记录中未找到匹配的构建"
+            echo "在 $((MAX_PAGES * PER_PAGE)) 条记录中未找到匹配的构建"
             echo "将尝试下载最新构建作为备选"
             
             # 备选方案：下载最新构建
-            LATEST_BUILD=$(curl -s -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
-              "https://api.github.com/repos/$REPO/actions/workflows/$FILENAME/runs?status=success&per_page=1" |
-              jq -r '.workflow_runs[0].id')
+            LATEST_RESPONSE=$(curl -s -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+              "https://api.github.com/repos/$REPO/actions/workflows/$FILENAME/runs?status=success&per_page=1")
+            
+            LATEST_BUILD=$(echo "$LATEST_RESPONSE" | jq -r '.workflow_runs[0].id // empty')
             
             if [ -n "$LATEST_BUILD" ] && [ "$LATEST_BUILD" != "null" ]; then
               echo "使用最新构建ID: $LATEST_BUILD"
@@ -311,13 +271,18 @@ jobs:
             echo "Manager 文件已下载为：$FILENAME"
             
             # 验证文件大小
-            FILE_SIZE=$(stat -c%s "$FILENAME" 2>/dev/null || stat -f%z "$FILENAME" 2>/dev/null || echo "0")
-            if [ "$FILE_SIZE" -gt 1000 ]; then
-              echo "文件大小: $((FILE_SIZE/1024)) KB，解压..."
-              unzip -q "$FILENAME" || echo "解压失败，但继续执行"
-              rm -f "$FILENAME"
+            if [ -f "$FILENAME" ]; then
+              FILE_SIZE=$(stat -c%s "$FILENAME" 2>/dev/null || stat -f%z "$FILENAME" 2>/dev/null || echo "0")
+              if [ "$FILE_SIZE" -gt 1000 ]; then
+                echo "文件大小: $((FILE_SIZE/1024)) KB，解压..."
+                unzip -q "$FILENAME" || echo "解压失败，但继续执行"
+                rm -f "$FILENAME"
+              else
+                echo "警告：下载的文件可能无效（大小: $FILE_SIZE 字节）"
+              fi
             else
-              echo "警告：下载的文件可能无效（大小: $FILE_SIZE 字节）"
+              echo "错误：文件下载失败"
+              exit 1
             fi
           else
             echo "错误：无法下载Manager文件"
@@ -325,6 +290,8 @@ jobs:
             echo "1. 没有成功的构建"
             echo "2. 构建产物已过期（GitHub只保留90天）"
             echo "3. API限流或权限问题"
+            echo "4. 指定的版本可能没有对应的构建"
+            echo "5. 构建产物名称不包含'Manager'关键字"
             exit 1
           fi
 
